@@ -13,7 +13,8 @@ networks:
         - subnet: 192.168.86.0/24
           gateway: 192.168.86.1
           ip_range: 192.168.86.10/27
-#  freenet: 
+  freenet: 
+    external: true
 #    name: freenet
 #    ipam: 
 #      config: 
