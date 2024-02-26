@@ -1,0 +1,229 @@
+version: '3.7'
+networks:
+  macvlan_eth0:
+    driver: macvlan
+    enable_ipv6: true
+    driver_opts:
+      parent: eth0
+    ipam:
+      config:
+        # bogus ipv6 subnet here. The container should use SLAAC to acquire a real ipv6 addr from your router
+        - subnet: 2001::0/64
+        # 172.25.0.64/27 = 64-95. Don't let your DHCP server assign IP's from this range.
+        - subnet: 10.0.40.0/24
+          gateway: 10.0.40.1
+          ip_range: 10.0.40.10/27
+  freenet: 
+    name: freenet
+    ipam: 
+      config: 
+        - gateway: 10.10.0.1
+          subnet: 10.10.0.0/24
+
+services:
+  uptime:
+    networks:
+        freenet:
+    image: louislam/uptime-kuma:latest
+    environment:
+      TZ: 'America/New_York'
+    container_name: uptime
+    labels:
+      traefik.enable: true
+      traefik.http.routers.uptime.entryPoints: https
+      traefik.http.routers.uptime.middlewares: auth@file,local-ipallowlist@file
+      traefik.http.services.uptime.loadbalancer.server.port: 3001
+    volumes:
+      - /home/pi/docker/uptime:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 3001:3001  # <Host Port>:<Container Port>
+    restart: always
+
+  traefik:
+    container_name: traefik
+    image: traefik:latest
+    ports:
+      - 80:80
+      - 443:443
+      - 8183:8183
+    #  - 8080:8080 # Dashboard port
+    volumes:
+      - /home/pi/docker/traefik/:/etc/traefik/
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+        freenet:
+        macvlan_eth0:
+          ipv4_address: 10.0.40.45
+    labels:
+      traefik.http.routers.api.rule: Host(`${TRAEFIK_URL}`)    # Define the subdomain for the traefik dashboard.
+      traefik.http.routers.api.entryPoints: https    # Set the Traefik entry point.
+      traefik.http.routers.api.service: api@internal    # Enable Traefik API.
+      traefik.enable: true   # Enable Traefik reverse proxy for the Traefik dashboard.
+      traefik.http.services.api.loadbalancer.server.port: 8183
+      traefik.http.routers.api.middlewares: auth@file,local-ipallowlist@file
+    environment:
+      TZ: 'America/New_York'
+      CF_DNS_API_TOKEN: ${TRAEFIK_DNS_API}
+    restart: always 
+    depends_on:
+      - docker-socket-proxy
+
+  docker-socket-proxy:
+    container_name: docker-socket-proxy
+    image: tecnativa/docker-socket-proxy
+    ports:
+      - 2375:2375
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - freenet
+    environment:
+      CONTAINERS: 1
+      POST: 0
+    privileged: true
+    restart: always
+
+  cloudflared:
+    image: erisamoe/cloudflared
+    container_name: cloudflared
+    restart: always
+    networks:
+      - freenet
+    volumes:
+      - /home/pi/docker/cloudflared:/etc/cloudflared
+    command: tunnel run ${CLOUDFLARE_TUNNEL_ID}
+
+  auth-postgresql:
+    image: postgres:12
+    restart: always
+    container_name: auth-postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - /home/pi/docker/auth-postgresql:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=${PG_PASS}
+      - POSTGRES_USER=${PG_USER:-authentik}
+      - POSTGRES_DB=${PG_DB:-authentik}
+   # env_file:
+   #   - .env
+    networks:
+        freenet:
+
+  auth-redis:
+    container_name: auth-redis
+    image: redis:7.0.12-alpine
+    networks:
+        freenet:
+    expose:
+      - 6379
+    command: /bin/sh -c "redis-server --requirepass ${REDIS_PASS}"
+    restart: always
+
+  auth:
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-latest}
+    restart: always
+    container_name: auth
+    command: server
+    environment:
+      AUTHENTIK_REDIS__HOST: auth-redis
+      AUTHENTIK_POSTGRESQL__HOST: auth-postgresql
+      AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}
+      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASS}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      GEOIPUPDATE_LICENSE_KEY: ${GEOIPUPDATE_LICENSE_KEY}
+      AUTHENTIK_AUTHENTIK__GEOIP: "/geoip/GeoLite2-City.mmdb"
+      GEOIPUPDATE_ACCOUNT_ID: ${GEOIPUPDATE_ACCOUNT_ID}
+    volumes:
+      - /home/pi/docker/auth/media:/media
+      - /home/pi/docker/auth/custom-templates:/templates
+      - /home/pi/docker/geoipupdate:/geoip
+    #env_file:
+    #  - .env
+    ports:
+      - "0.0.0.0:${COMPOSE_PORT_HTTP:-9000}:9000"
+      - "0.0.0.0:${COMPOSE_PORT_HTTPS:-9443}:9443"
+    networks:
+        freenet:
+    labels:
+      traefik.enable: true
+      traefik.http.routers.auth.entryPoints: https
+      traefik.http.routers.auth.middlewares: local-ipallowlist@file
+      traefik.http.routers.auth.rule: Host(`${AUTH_URL}`) || HostRegexp(`{subdomain:[a-z0-9]+}.domain.com`) && PathPrefix(`/outpost.goauthentik.io/`)
+  
+  auth-worker:
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-latest}
+    restart: always
+    container_name: auth-worker
+    command: worker
+    environment:
+      AUTHENTIK_REDIS__HOST: auth-redis
+      AUTHENTIK_POSTGRESQL__HOST: auth-postgresql
+      AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}
+      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASS}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+    user: root
+    volumes:
+      - /home/pi/docker/auth/media:/media
+      - /home/pi/docker/auth/certs:/certs
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/pi/docker/auth/custom-templates:/templates
+    #env_file:
+    #  - .env
+    networks:
+        freenet:
+
+  traefik-logrotate:
+    image: vegardit/traefik-logrotate:latest
+    container_name: traefik-logrotate
+    restart: always
+    volumes:
+      - /home/pi/docker/traefik/logs:/var/log/traefik:rw
+      - /var/run/docker.sock:/var/run/docker.sock:rw # required to send USR1 signal to Traefik after log rotation
+    environment:
+      TZ: "America/New_York"
+      # all environment variables are optional and show the default values:
+      LOGROTATE_LOGS: "/var/log/traefik/*.log" # log files to rotate, directory must match volume mount
+      LOGROTATE_TRIGGER_INTERVAL: daily  # rotate daily, must be one of: daily, weekly, monthly, yearly
+      LOGROTATE_TRIGGER_SIZE: 50M        # rotate if log file size reaches 50MB
+      LOGROTATE_MAX_BACKUPS: 7          # keep 14 backup copies per rotated log file
+      LOGROTATE_START_INDEX: 1           # first rotated file is called access.1.log
+      CRON_SCHEDULE: "* * * * *"
+      CRON_LOG_LEVEL: 8                  # see https://unix.stackexchange.com/a/414010/378036
+      # command to determine the id of the container running Traefik:
+      TRAEFIK_CONTAINER_ID_COMMAND: docker ps --no-trunc --quiet --filter label=org.opencontainers.image.title=Traefik
+      
+  watchtower:
+    container_name: watchtower
+    restart: always
+    environment:
+      WATCHTOWER_SCHEDULE: 0 0 9 * * ?
+      TZ: "America/New_York"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_DEBUG: "true"
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      
+  geoipupdate:
+    container_name: geoipupdate
+    image: ghcr.io/maxmind/geoipupdate
+    restart: always
+    environment:
+      - GEOIPUPDATE_ACCOUNT_ID=${GEOIPUPDATE_ACCOUNT_ID}
+      - GEOIPUPDATE_LICENSE_KEY=${GEOIPUPDATE_LICENSE_KEY}
+      - 'GEOIPUPDATE_EDITION_IDS=GeoLite2-ASN GeoLite2-City GeoLite2-Country'
+      - GEOIPUPDATE_FREQUENCY=72
+    networks:
+        freenet:
+    volumes:
+      - /home/pi/docker/geoipupdate:/usr/share/GeoIP
