@@ -13,12 +13,12 @@ networks:
         - subnet: 192.168.86.0/24
           gateway: 192.168.86.1
           ip_range: 192.168.86.10/27
-  freenet: 
-    name: freenet
-    ipam: 
-      config: 
-        - gateway: 10.10.0.1
-          subnet: 10.10.0.0/24
+#  freenet: 
+#    name: freenet
+#    ipam: 
+#      config: 
+#        - gateway: 10.10.0.1
+#          subnet: 10.10.0.0/24
 
 services:
   uptime:
