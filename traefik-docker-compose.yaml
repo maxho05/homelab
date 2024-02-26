@@ -10,9 +10,9 @@ networks:
         # bogus ipv6 subnet here. The container should use SLAAC to acquire a real ipv6 addr from your router
         - subnet: 2001::0/64
         # 172.25.0.64/27 = 64-95. Don't let your DHCP server assign IP's from this range.
-        - subnet: 10.0.40.0/24
-          gateway: 10.0.40.1
-          ip_range: 10.0.40.10/27
+        - subnet: 192.168.86.0/24
+          gateway: 192.168.86.1
+          ip_range: 192.168.86.10/27
   freenet: 
     name: freenet
     ipam: 
@@ -34,7 +34,7 @@ services:
       traefik.http.routers.uptime.middlewares: auth@file,local-ipallowlist@file
       traefik.http.services.uptime.loadbalancer.server.port: 3001
     volumes:
-      - /home/pi/docker/uptime:/app/data
+      - /home/sysadm/docker/uptime:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - 3001:3001  # <Host Port>:<Container Port>
@@ -49,12 +49,12 @@ services:
       - 8183:8183
     #  - 8080:8080 # Dashboard port
     volumes:
-      - /home/pi/docker/traefik/:/etc/traefik/
+      - /home/sysadm/docker/traefik/:/etc/traefik/
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
         freenet:
         macvlan_eth0:
-          ipv4_address: 10.0.40.45
+          ipv4_address: 192.168.86.45
     labels:
       traefik.http.routers.api.rule: Host(`${TRAEFIK_URL}`)    # Define the subdomain for the traefik dashboard.
       traefik.http.routers.api.entryPoints: https    # Set the Traefik entry point.
@@ -91,7 +91,7 @@ services:
     networks:
       - freenet
     volumes:
-      - /home/pi/docker/cloudflared:/etc/cloudflared
+      - /home/sysadm/docker/cloudflared:/etc/cloudflared
     command: tunnel run ${CLOUDFLARE_TUNNEL_ID}
 
   auth-postgresql:
@@ -105,7 +105,7 @@ services:
       retries: 5
       timeout: 5s
     volumes:
-      - /home/pi/docker/auth-postgresql:/var/lib/postgresql/data
+      - /home/sysadm/docker/auth-postgresql:/var/lib/postgresql/data
     environment:
       - POSTGRES_PASSWORD=${PG_PASS}
       - POSTGRES_USER=${PG_USER:-authentik}
@@ -142,9 +142,9 @@ services:
       AUTHENTIK_AUTHENTIK__GEOIP: "/geoip/GeoLite2-City.mmdb"
       GEOIPUPDATE_ACCOUNT_ID: ${GEOIPUPDATE_ACCOUNT_ID}
     volumes:
-      - /home/pi/docker/auth/media:/media
-      - /home/pi/docker/auth/custom-templates:/templates
-      - /home/pi/docker/geoipupdate:/geoip
+      - /home/sysadm/docker/auth/media:/media
+      - /home/sysadm/docker/auth/custom-templates:/templates
+      - /home/sysadm/docker/geoipupdate:/geoip
     #env_file:
     #  - .env
     ports:
@@ -173,10 +173,10 @@ services:
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
     user: root
     volumes:
-      - /home/pi/docker/auth/media:/media
-      - /home/pi/docker/auth/certs:/certs
+      - /home/sysadm/docker/auth/media:/media
+      - /home/sysadm/docker/auth/certs:/certs
       - /var/run/docker.sock:/var/run/docker.sock
-      - /home/pi/docker/auth/custom-templates:/templates
+      - /home/sysadm/docker/auth/custom-templates:/templates
     #env_file:
     #  - .env
     networks:
@@ -187,7 +187,7 @@ services:
     container_name: traefik-logrotate
     restart: always
     volumes:
-      - /home/pi/docker/traefik/logs:/var/log/traefik:rw
+      - /home/sysadm/docker/traefik/logs:/var/log/traefik:rw
       - /var/run/docker.sock:/var/run/docker.sock:rw # required to send USR1 signal to Traefik after log rotation
     environment:
       TZ: "America/New_York"
@@ -226,4 +226,4 @@ services:
     networks:
         freenet:
     volumes:
-      - /home/pi/docker/geoipupdate:/usr/share/GeoIP
+      - /home/sysadm/docker/geoipupdate:/usr/share/GeoIP
