@@ -259,9 +259,9 @@ services:
       - /home/sysadm/docker/immich/profile:/photos/profile
       - /home/sysadm/docker/immich/machine-learning:/config/machine-learning
       - /home/sysadm/docker/immich:/config
-      - /mnt/encoded-video:/photos/encoded-video
-      - /mnt/upload/:/photos/upload
-      - /mnt/Media/:/photos/library
+      - encoded-video:/photos/encoded-video
+      - upload:/photos/upload
+      - Media:/photos/library
 
     ports:
       - 8080:8080
